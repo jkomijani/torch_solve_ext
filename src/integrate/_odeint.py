@@ -51,8 +51,12 @@ def odeint(func, t_span, var0, frozen_var, step_size=1e-3, method='RK4',
     else:
         raise Exception("other methods are not implemented yet")
 
-    n_grid = 1 + 2 * abs(int((t_span[1] - t_span[0]) / step_size / 2))
-    # n_grid is hard wired to be odd in order to use Simpson's formula.
+    if loss_rate is None:
+        n_grid = 1 + abs(int((t_span[1] - t_span[0]) / step_size))
+    else:
+        n_grid = 1 + 2 * abs(int((t_span[1] - t_span[0]) / step_size / 2))
+        # n_grid is hard wired to be odd in order to use Simpson's formula.
+
     t_range = np.linspace(*t_span, n_grid)
     step_size = t_range[1] - t_range[0]  # slightly modified step_size
 
@@ -81,7 +85,7 @@ def euler_step(func, t, var, frozen_var, dt):
 
 
 def rk4_step(func, t, var, frozen_var, dt):
-    """Perform a single Runge-Kutta step."""
+    """Perform a single Runge-Kutta-4 step."""
     half_dt = dt / 2
     k_1 = func(t, var, frozen_var)
     k_2 = func(t + half_dt, var + half_dt * k_1, frozen_var)

@@ -1,4 +1,4 @@
-# Copyright (C) 2024 Javad Komijani
+# Copyright (c) 2024 Javad Komijani
 
 from ._odeint import odeint
 
