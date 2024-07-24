@@ -22,6 +22,7 @@ def lie_group_odeint(func, t_span, var0, frozen_var,
     ----------
     func: callable
         Computes ``f(t, U; p)`` or ``F(t, U; p)``, depending on the ``method``.
+        (Default is ``f``.)
     t_span: a sequence
         First and second items are the initial and terminal flow times.
     var0: tensor
@@ -55,6 +56,7 @@ def lie_group_odeint(func, t_span, var0, frozen_var,
             )
 
 
+# =============================================================================
 def augmented_special_unitary_rk4_step(func, t, var, frozen_var, dt):
     delta, d_other = rk4_step_kernel(func, t, var, frozen_var, dt).tuple()
     var, other = var.tuple()
