@@ -58,10 +58,10 @@ def lie_group_odeint(func, t_span, var0, frozen_var,
 
 # =============================================================================
 def augmented_special_unitary_rk4_step(func, t, var, frozen_var, dt):
-    delta, d_other = rk4_step_kernel(func, t, var, frozen_var, dt).tuple()
-    var, other = var.tuple()
+    delta, d_other = delta_from_rk4_step(func, t, var, frozen_var, dt).tuple
+    var, other = var.tuple
     var = construct_rk4_special_unitary(delta @ var.adjoint()) @ var
-    other += d_other
+    other = other + d_other
     return TupleVar(var, other)
 
 
@@ -88,7 +88,7 @@ def construct_rk4_special_unitary(eps):
     for power in range(2, 5):
         # power of 5 and larger powers are not needed as error is O(eps^5)
         dummy = dummy @ (-eps)
-        exponent += dummy / power
+        exponent = exponent + dummy / power
     return torch.matrix_exp(anti_hermitian_traceless(exponent))
 
 
