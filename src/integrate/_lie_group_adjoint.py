@@ -3,6 +3,7 @@
 from ._lie_group_odeint import lie_group_odeint
 from ._adjoint import TupleVar
 from ._adjoint import tie_adjoints
+from ._adjoint import trace_complex_df_dx
 
 import torch
 from functools import partial as ftpartial
@@ -114,10 +115,13 @@ def anti_hermitian(mtrx):
 # =============================================================================
 class LieGroupFuncAdjWrapper(torch.nn.Module, ABC):
     """Any function that is used for defining the dynamics of an ODE flow with
-    the adjoint method must be a subclass of this class.
+    the adjoint method for lie groups must be a subclass of this class.
 
-    The ``forward`` and ``calc_logj_rate`` methods must be defined in any
-    subclass.
+    The dynamics governing the algebra variable is supposed to be defined in
+    `algebra_dynamics`, which is an abstract method should be defined in
+    subclasses.
+    Although `calc_logj_rate` method calculates ``Re Tr (df / dx)``, it is in
+    general slow, and we recommend to redefine it in subclasses.
 
     Integrate a system of ODEs of the form::
 
@@ -139,16 +143,16 @@ class LieGroupFuncAdjWrapper(torch.nn.Module, ABC):
         """The function defining ``F(t, U; p)``."""
         pass
 
-    @abstractmethod
     def calc_logj_rate(self, t, var, frozen_var):
-        """Return None or ``ReTr (df / dx)`` as the rate of log(J)."""
-        pass
+        """Return ``Re Tr (df / dx)`` as the rate of ``log(J)``."""
+        func = lambda var: self.forward(t, var, frozen_var)
+        return trace_complex_df_dx(func, var)
 
     def aug_reverse(self, t, aug_var, aug_frozen_var):
         """Here `aug_var` contains the state variable and the adjoint state
         variable at time `t`. Similarly, `aug_frozen_var` contains the frozen
-        variables, `grad_logj`, defined as gradient of the loss function wrt
-        logj, and the parameters of the model.
+        variables, `grad_logj`, defined as gradient of the loss function w.r.t.
+        `logj`, and the parameters of the model.
         """
         var, grad_alg_var = aug_var.tuple
         frozen_var, grad_logj, *params = aug_frozen_var.tuple

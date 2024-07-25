@@ -100,8 +100,10 @@ class FuncAdjWrapper(torch.nn.Module, ABC):
     """Any function that is used for defining the dynamics of an ODE flow with
     the adjoint method must be a subclass of this class.
 
-    The ``forward`` and ``calc_logj_rate`` methods must be defined in any
-    subclass.
+    The dynamics governing the flow of state variable is supposed to be defined
+    in `forward`, which is an abstract method should be defined in subclasses.
+    Although `calc_logj_rate` method calculates ``Tr (df / dx)``, it is in
+    general slow, and we recommend to redefine it in subclasses.
     """
 
     @abstractmethod
@@ -109,16 +111,16 @@ class FuncAdjWrapper(torch.nn.Module, ABC):
         """The function defining the evolution of the state variable."""
         pass
 
-    @abstractmethod
     def calc_logj_rate(self, t, var, frozen_var):
-        """Return None or trace of `df / dx` as the rate of log(J)."""
-        pass
+        """Return the trace of ``df / dx`` as the rate of ``log(J)``."""
+        func = lambda var: self.forward(t, var, frozen_var)
+        return trace_df_dx(func, var)
 
     def aug_reverse(self, t, aug_var, aug_frozen_var):
         """Here `aug_var` contains the state variable and the adjoint state
         variable at time `t`. Similarly, `aug_frozen_var` contains the frozen
-        variables, `grad_logj`, defined as gradient of the loss function wrt
-        logj, and the parameters of the model.
+        variables, `grad_logj`, defined as gradient of the loss function w.r.t.
+        `logj`, and the parameters of the model.
         """
         var, grad_var = aug_var.tuple
         frozen_var, grad_logj, *params = aug_frozen_var.tuple
@@ -176,6 +178,43 @@ def tie_adjoints(x_bar, x_dot):
     """
     dim = list(range(1, x_dot.ndim))
     return torch.sum((x_bar.conj() * x_dot).real, dim=dim)
+
+
+def trace_df_dx(func, var):
+    """Calculates the trace of ``df(x) / dx`` for real variables."""
+
+    if torch.is_complex(var):
+        return trace_complex_df_dx(func, var)
+
+    # The following manipulations is for using torch.autograd.grad
+    if not var.requires_grad:
+        var = var.detach().requires_grad_(True)
+    x = var.reshape(var.shape[0], -1)
+    f = func(x.reshape(*var.shape)).sum(dim=0).reshape(-1)
+
+    trace = 0.
+    for ind in range(x.shape[1]):
+        trace += torch.autograd.grad(f[ind], x, retain_graph=True)[0][:, ind]
+
+    return trace
+
+
+def trace_complex_df_dx(func, var):
+    """Calculates the trace of ``df(x) / dx`` for complex variables."""
+
+    # The following manipulations is for using torch.autograd.grad
+    if not var.requires_grad:
+        var = var.detach().requires_grad_(True)
+    x = var.reshape(var.shape[0], -1).real
+    y = var.reshape(var.shape[0], -1).imag
+    f = func((x + 1j * y).reshape(*var.shape)).sum(dim=0).reshape(-1)
+
+    trace = 0.
+    for ind in range(x.shape[1]):
+        trace += torch.autograd.grad(f[ind].real, x, retain_graph=True)[0][:, ind]
+        trace += torch.autograd.grad(f[ind].imag, y, retain_graph=True)[0][:, ind]
+
+    return trace
 
 
 # =============================================================================
