@@ -9,29 +9,36 @@ from ._odeint import odeint
 
 
 # =============================================================================
-class AdjODEflow_:
-    """For flowing state variables governed by a system of ODEs."""
+class AdjODEflow_(torch.nn.Module):
+    """A `Module` for evolution of state variables governed by ODEs.
 
-    cls_odeint = (odeint,)  # saved as a tuple, otherwise 1st argument is `cls`
+    Similar to `ODEflow`, but it also returns the logarithm of Jacobian of
+    transformation provided that `func` has `calc_logj_rate` attribute.
+    More importantly, this class provides a backward propagation of derivatives
+    using the adjoint method. To this end, `func` is required be a subclass of
+    `FuncAdjWrapper`.
+
+    See `ODEflow` for description of the class.
+    """
+    # TODO: change such that `func` need not be a subclass of `FuncAdjWrapper`.
 
     def __init__(self, func, t_span, **odeint_kwargs):
-        super().__init__()
+
         assert isinstance(func, FuncAdjWrapper)
+
+        super().__init__()
         self.func = func
         self.t_span = t_span
-        self.odeint = functools.partial(self.cls_odeint[0], **odeint_kwargs)
+        self.odeint = functools.partial(odeint, **odeint_kwargs)
     
-    def __call__(self, var, frozen_var):
-        return self.forward(var, frozen_var)
-
-    def forward(self, var, frozen_var):
+    def forward(self, var, frozen_var=None):
         params = self.func.params_
         var, logj = AdjointWrapper_.apply(
             self.odeint, self.func, self.t_span, var, frozen_var, *params
             )
         return var, logj
 
-    def reverse(self, var, frozen_var):
+    def reverse(self, var, frozen_var=None):
         params = self.func.params_
         var, logj = AdjointWrapper_.apply(
             self.odeint, self.func, self.t_span[::-1], var, frozen_var, *params
@@ -107,11 +114,11 @@ class FuncAdjWrapper(torch.nn.Module, ABC):
     """
 
     @abstractmethod
-    def forward(self, t, var, frozen_var):
+    def forward(self, t, var, frozen_var=None):
         """The function defining the evolution of the state variable."""
         pass
 
-    def calc_logj_rate(self, t, var, frozen_var):
+    def calc_logj_rate(self, t, var, frozen_var=None):
         """Return the trace of ``df / dx`` as the rate of ``log(J)``."""
         func = lambda var: self.forward(t, var, frozen_var)
         return trace_df_dx(func, var)
@@ -210,9 +217,9 @@ def trace_complex_df_dx(func, var):
     f = func((x + 1j * y).reshape(*var.shape)).sum(dim=0).reshape(-1)
 
     trace = 0.
-    for ind in range(x.shape[1]):
-        trace += torch.autograd.grad(f[ind].real, x, retain_graph=True)[0][:, ind]
-        trace += torch.autograd.grad(f[ind].imag, y, retain_graph=True)[0][:, ind]
+    for k in range(x.shape[1]):
+        trace += torch.autograd.grad(f[k].real, x, retain_graph=True)[0][:, k]
+        trace += torch.autograd.grad(f[k].imag, y, retain_graph=True)[0][:, k]
 
     return trace
 

@@ -12,14 +12,26 @@ from abc import abstractmethod, ABC
 
 
 # =============================================================================
-class LieGroupAdjODEflow_:
-    """For flowing state variables governed by a system of ODEs."""
+class LieGroupAdjODEflow_(torch.nn.Module):
+    """A `Module` for evolution of Lie-group state variables governed by ODEs.
+
+    Similar to `LieGroupODEflow`, but it also returns the logarithm of Jacobian
+    of transformation provided that `func` has `calc_logj_rate` attribute.
+    More importantly, this class provides a backward propagation of derivatives
+    using the adjoint method. To this end, `func` is required be a subclass of
+    `LieGroupFuncAdjWrapper`.
+
+    See `LieGroupODEflow` for description of the class.
+    """
+    # TODO: change such that `func` need not be a subclass of `FuncAdjWrapper`.
 
     def __init__(self, func, t_span,
             methods=['RK4:SU(n)', 'RK4:SU(n):aug'], **odeint_kwargs
             ):
-        super().__init__()
+
         assert isinstance(func, LieGroupFuncAdjWrapper)
+
+        super().__init__()
         self.func = func
         self.t_span = t_span
         self.odeints = [
@@ -27,17 +39,14 @@ class LieGroupAdjODEflow_:
             ftpartial(lie_group_odeint, method=methods[1], **odeint_kwargs)
             ]
 
-    def __call__(self, var, frozen_var):
-        return self.forward(var, frozen_var)
-
-    def forward(self, var, frozen_var):
+    def forward(self, var, frozen_var=None):
         params = self.func.params_
         var, logj = LieGroupAdjointWrapper_.apply(
            self.odeints, self.func, self.t_span, var, frozen_var, *params
            )
         return var, logj
 
-    def reverse(self, var, frozen_var):
+    def reverse(self, var, frozen_var=None):
         params = self.func.params_
         var, logj = LieGroupAdjointWrapper_.apply(
            self.odeints, self.func, self.t_span[::-1], var, frozen_var, *params
@@ -134,16 +143,16 @@ class LieGroupFuncAdjWrapper(torch.nn.Module, ABC):
     One should define ``algbra_dynamics`` that returns ``F(t, U; p)``.
     """
 
-    def forward(self, t, var, frozen_var):
+    def forward(self, t, var, frozen_var=None):
         """The function defining the evolution of the state variable."""
         return self.algebra_dynamics(t, var, frozen_var) @ var
 
     @abstractmethod
-    def algebra_dynamics(self, t, var, frozen_var):
+    def algebra_dynamics(self, t, var, frozen_var=None):
         """The function defining ``F(t, U; p)``."""
         pass
 
-    def calc_logj_rate(self, t, var, frozen_var):
+    def calc_logj_rate(self, t, var, frozen_var=None):
         """Return ``Re Tr (df / dx)`` as the rate of ``log(J)``."""
         func = lambda var: self.forward(t, var, frozen_var)
         return trace_complex_df_dx(func, var)
