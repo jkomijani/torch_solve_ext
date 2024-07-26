@@ -16,15 +16,15 @@ class AdjODEflow_(torch.nn.Module):
     transformation provided that `func` has `calc_logj_rate` attribute.
     More importantly, this class provides a backward propagation of derivatives
     using the adjoint method. To this end, `func` is required be a subclass of
-    `FuncAdjWrapper`.
+    `DynamcisAdjWrapper`.
 
     See `ODEflow` for description of the class.
     """
-    # TODO: change such that `func` need not be a subclass of `FuncAdjWrapper`.
+    # TODO: change such that `func` need not be a subclass of `DynamcisAdjWrapper`.
 
     def __init__(self, func, t_span, **odeint_kwargs):
 
-        assert isinstance(func, FuncAdjWrapper)
+        assert isinstance(func, DynamcisAdjWrapper)
 
         super().__init__()
         self.func = func
@@ -58,7 +58,7 @@ class AdjointWrapper_(torch.autograd.Function):
     def forward(ctx, odeint, func, t_span, var, frozen_var, *params):
         # `*params` should be given in order to calculate derivatives wrt them.
 
-        assert isinstance(func, FuncAdjWrapper)
+        assert isinstance(func, DynamcisAdjWrapper)
 
         var, logj = odeint(
                 func.forward, t_span, var, frozen_var,
@@ -103,7 +103,7 @@ class AdjointWrapper_(torch.autograd.Function):
 
 
 # =============================================================================
-class FuncAdjWrapper(torch.nn.Module, ABC):
+class DynamcisAdjWrapper(torch.nn.Module, ABC):
     """Any function that is used for defining the dynamics of an ODE flow with
     the adjoint method must be a subclass of this class.
 

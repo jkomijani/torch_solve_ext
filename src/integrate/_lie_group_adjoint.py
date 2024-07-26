@@ -19,17 +19,17 @@ class LieGroupAdjODEflow_(torch.nn.Module):
     of transformation provided that `func` has `calc_logj_rate` attribute.
     More importantly, this class provides a backward propagation of derivatives
     using the adjoint method. To this end, `func` is required be a subclass of
-    `LieGroupFuncAdjWrapper`.
+    `LieGroupDynamicsAdjWrapper`.
 
     See `LieGroupODEflow` for description of the class.
     """
-    # TODO: change such that `func` need not be a subclass of `FuncAdjWrapper`.
+    # TODO: change such that `func` need not be a subclass of `DynamcisAdjWrapper`.
 
     def __init__(self, func, t_span,
             methods=['RK4:SU(n)', 'RK4:SU(n):aug'], **odeint_kwargs
             ):
 
-        assert isinstance(func, LieGroupFuncAdjWrapper)
+        assert isinstance(func, LieGroupDynamicsAdjWrapper)
 
         super().__init__()
         self.func = func
@@ -66,7 +66,7 @@ class LieGroupAdjointWrapper_(torch.autograd.Function):
     def forward(ctx, odeints, func, t_span, var, frozen_var, *params):
         # `*params` should be given in order to calculate derivatives wrt them.
 
-        assert isinstance(func, LieGroupFuncAdjWrapper)
+        assert isinstance(func, LieGroupDynamicsAdjWrapper)
 
         var, logj = odeints[0](
                 func.forward, t_span, var, frozen_var,
@@ -122,7 +122,7 @@ def anti_hermitian(mtrx):
 
 
 # =============================================================================
-class LieGroupFuncAdjWrapper(torch.nn.Module, ABC):
+class LieGroupDynamicsAdjWrapper(torch.nn.Module, ABC):
     """Any function that is used for defining the dynamics of an ODE flow with
     the adjoint method for lie groups must be a subclass of this class.
 
