@@ -36,8 +36,8 @@ def odeint(func, t_span, var0, frozen_var, step_size=1e-3, method='RK4',
     loss_rate: None or callable
         If callable, it will be treated as the integrand of a loss integral
         over time. It will be evaluated at each step, and summed over [with
-        Simpson's rule], and the sum will be returned as output along with
-        the state variable.
+        Simpson's rule if possible], and the sum will be returned as output
+        along with the state variable.
 
     Remark::
     This code can handle any number of batch axes if ``func`` can handle them.
@@ -51,31 +51,38 @@ def odeint(func, t_span, var0, frozen_var, step_size=1e-3, method='RK4',
     else:
         raise Exception("other methods are not implemented yet")
 
-    if loss_rate is None:
-        n_grid = 1 + abs(int((t_span[1] - t_span[0]) / step_size))
-    else:
-        n_grid = 1 + 2 * abs(int((t_span[1] - t_span[0]) / step_size / 2))
-        # n_grid is hard wired to be odd in order to use Simpson's formula.
+    n_grid = 1 + abs(int((t_span[1] - t_span[0]) / step_size))
 
     t_range = np.linspace(*t_span, n_grid)
-    step_size = t_range[1] - t_range[0]  # slightly modified step_size
+    step_size = t_range[1] - t_range[0]  # might have beeen slightly changed
 
     var = var0
 
     if loss_rate is None:
+
         for t in enumerate(t_range[:-1]):
             var = step(func, t, var, frozen_var, step_size)
         return var
 
     else:
         assert hasattr(loss_rate, '__call__')
+
+        simpsons_rule = (n_grid % 2 == 1)  # for summing loss rate
+
         loss = loss_rate(t_range[0], var, frozen_var)
+
         for ind, t in enumerate(t_range[:-1]):
             var = step(func, t, var, frozen_var, step_size)
-            l_r = loss_rate(t_range[ind + 1], var, frozen_var)
-            loss += l_r * (4 if ind % 2 == 0 else 2)
-        loss -= l_r  # for the last part
-        loss *= (step_size / 3)
+            dloss = loss_rate(t_range[ind + 1], var, frozen_var)
+            if simpsons_rule and ind % 2 == 0:
+                loss += 4 * dloss
+            else:
+                loss += 2 * dloss
+        loss -= dloss  # for the last `ind`
+        if simpsons_rule:
+            loss *= (step_size / 3)
+        else:
+            loss *= (step_size / 2)
         return var, loss
 
 

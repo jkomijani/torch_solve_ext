@@ -37,8 +37,8 @@ def lie_group_odeint(func, t_span, var0, frozen_var,
     loss_rate: None or callable
         If callable, it will be treated as the integrand of a loss integral
         over time. It will be evaluated at each step, and summed over [with
-        Simpson's rule], and the sum will be returned as output along with
-        the state variable.
+        Simpson's rule if possible], and the sum will be returned as output
+        along with the state variable.
     """
 
     if method == 'RK4:SU(n)':
