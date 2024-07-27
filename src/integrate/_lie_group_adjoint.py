@@ -39,19 +39,19 @@ class LieGroupAdjODEflow_(torch.nn.Module):
             ftpartial(lie_group_odeint, method=methods[1], **odeint_kwargs)
             ]
 
-    def forward(self, var, frozen_var=None):
+    def forward(self, var, frozen_var=None, log0=0):
         params = self.func.params_
         var, logj = LieGroupAdjointWrapper_.apply(
            self.odeints, self.func, self.t_span, var, frozen_var, *params
            )
-        return var, logj
+        return var, logj + log0
 
-    def reverse(self, var, frozen_var=None):
+    def reverse(self, var, frozen_var=None, log0=0):
         params = self.func.params_
         var, logj = LieGroupAdjointWrapper_.apply(
            self.odeints, self.func, self.t_span[::-1], var, frozen_var, *params
            )
-        return var, logj
+        return var, logj + log0
 
 
 # =============================================================================
@@ -101,15 +101,25 @@ class LieGroupAdjointWrapper_(torch.autograd.Function):
         aug_var = TupleVar(var, grad_alg_var)
         aug_frozen_var = TupleVar(frozen_var, grad_logj, *params)
 
-        aug_var, aug_loss = odeints[1](
+        fzn = frozen_var
+        if len(params) == 0 and (fzn is None or not fzn.requires_grad):
+            aug_var = odeints[1](
+                func.aug_reverse, t_span[::-1], aug_var, aug_frozen_var
+                )
+            aug_loss = None
+        else:
+            aug_var, aug_loss = odeints[1](
                 func.aug_reverse, t_span[::-1], aug_var, aug_frozen_var,
                 loss_rate=func.calc_grad_params_rate
                 )
+
         var, grad_alg_var = aug_var.tuple
         # grad_alg_var must be already anti-hermitian, yet we project it again.
         grad_var = anti_hermitian(grad_alg_var) @ var
 
-        if (frozen_var is None) or (not frozen_var.requires_grad):
+        if aug_loss is None:
+            grad_frozen_var, grad_params = None, []
+        elif (fzn is None or not fzn.requires_grad):
             grad_frozen_var, grad_params = None, aug_loss.tuple
         else:
             grad_frozen_var, *grad_params = aug_loss.tuple
