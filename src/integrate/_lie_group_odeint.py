@@ -47,6 +47,8 @@ def lie_group_odeint(func, t_span, var0, frozen_var,
         step = augmented_special_unitary_rk4_step
     elif method == 'RK3:u(n):auto':
         step = unitary_autonomous_rk3_step
+    elif method == 'Euler:u(n)':
+        step = unitary_euler_step
     else:
         raise ValueError("other methods are not implemented yet")
 
@@ -65,6 +67,7 @@ def augmented_special_unitary_rk4_step(func, t, var, frozen_var, dt):
     return TupleVar(var, other)
 
 
+# =============================================================================
 def special_unitary_rk4_step(func, t, var, frozen_var, dt):
     """Perform a single Runge-Kutta-4 step for special unitary `var`.
     The output `var` is by contruction special unitary too.
@@ -73,7 +76,7 @@ def special_unitary_rk4_step(func, t, var, frozen_var, dt):
 
     .. math::
 
-         U_{t + dt} = U_t + {shift} + O(h^5)= (I + \delta + O(h^5)) U_t
+         U_{t + dt} = U_t + {shift} + O(h^5) = (I + \delta + O(h^5)) U_t
 
     We rewrite the coefficient of ``U_t`` as a special unitary matrix.
     """
@@ -136,3 +139,9 @@ def unitary_autonomous_rk3_step(algebra_func, t, var, frozen_var, step_size):
             zee = (3 / 4 * step_size) * func_value - zee
         var = torch.matrix_exp(zee) @ var
     return var
+
+
+# =============================================================================
+def unitary_euler_step(algebra_func, t, var, frozen_var, step_size):
+    """Perform a single Euler step for unitary matrices."""
+    return torch.matrix_exp(algebra_func(t, var, frozen_var) * step_size) @ var
