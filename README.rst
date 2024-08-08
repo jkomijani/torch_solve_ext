@@ -16,15 +16,15 @@ fixed parameters that control the flow. In addition to integrating the ODEs up
 to a specific time, we would like to have :math:`\log|J|`, where :math:`J` is
 the Jacobian matrix of the transformation. For back-propagation of derivatives,
 we use the *adjoint* method. To do so, we need to define the flow function as a
-subclass of ``FuncAdjWrapper``. Then we use ``AdjODEflow_`` to integrate the
-ODE.
+subclass of ``DynamcisAdjWrapper``. Then we use ``AdjODEflow_`` to integrate
+the ODE.
 
 We first import the required modules:
 
 .. code::
 
     import torch
-    from torch_solve_ext.integrate import AdjODEflow_, FuncAdjWrapper
+    from torch_solve_ext.integrate import AdjODEflow_, DynamcisAdjWrapper
 
 
 To be more specific, we focus on an ODE of the form
@@ -44,7 +44,7 @@ batch axis):
     proj = proj.unsqueeze(0)
     
     
-    class Func(FuncAdjWrapper):
+    class Func(DynamcisAdjWrapper):
     
         @staticmethod
         def forward(t, var, frozen_var): 
