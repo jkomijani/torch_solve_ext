@@ -35,11 +35,11 @@ class LieGroupODEflow(torch.nn.Module):
         self.t_span = t_span
         self.odeint = functools.partial(lie_group_odeint, **odeint_kwargs)
 
-    def forward(self, var, frozen_var=None):
-        return self.odeint(self.func, self.t_span, var, frozen_var)
+    def forward(self, var, args=None):
+        return self.odeint(self.func, self.t_span, var, args=args)
 
-    def reverse(self, var, frozen_var=None):
-        return self.odeint(self.func, self.t_span[::-1], var, frozen_var)
+    def reverse(self, var, args=None):
+        return self.odeint(self.func, self.t_span[::-1], var, args=args)
 
 
 class LieGroupODEflow_(LieGroupODEflow):

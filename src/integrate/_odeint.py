@@ -1,12 +1,14 @@
 # Copyright (c) 2024 Javad Komijani
 
-import numpy as np
+"""Solve an initial value problem for a system of ODEs."""
+
+import torch
 
 
-def odeint(func, t_span, var0, frozen_var, step_size=1e-3, method='RK4',
-        loss_rate=None
-        ):
-    r"""Integrate a system of ODEs.
+def odeint(
+    func, t_span, var0, args=None, step_size=1e-3, method='RK4', loss_rate=None
+):
+    r"""Solve an initial value problem for a system of ODEs.
 
     The system of ODEs is::
 
@@ -24,7 +26,7 @@ def odeint(func, t_span, var0, frozen_var, step_size=1e-3, method='RK4',
         First and second items are the initial and terminal flow times.
     var0: tensor
         Initial state variable, i.e. the initial value of vector ``y``.
-    frozen_var: tensor
+    args: tuple[tensor]
         The parameters specifying the system.
     step_size: float
         The size of increament in the flow time ``t`` at each step
@@ -49,31 +51,30 @@ def odeint(func, t_span, var0, frozen_var, step_size=1e-3, method='RK4',
     elif method == 'Euler':
         step = euler_step
     else:
-        raise Exception("other methods are not implemented yet")
+        raise ValueError(f"{method} is not supported!")
+
+    if args is None:
+        args = ()
+    elif not isinstance(args, tuple):
+        args = (args,)
 
     n_grid = 1 + abs(int((t_span[1] - t_span[0]) / step_size))
 
-    t_range = np.linspace(*t_span, n_grid)
-    step_size = t_range[1] - t_range[0]  # might have beeen slightly changed
+    t_range = torch.linspace(*t_span, n_grid)
+    step_size = t_range[1] - t_range[0]  # update step_size
 
     var = var0
 
-    if loss_rate is None:
-
-        for t in enumerate(t_range[:-1]):
-            var = step(func, t, var, frozen_var, step_size)
-        return var
-
-    else:
-        assert hasattr(loss_rate, '__call__')
+    # Start block if loss_rate is callable
+    if hasattr(loss_rate, '__call__'):
 
         simpsons_rule = (n_grid % 2 == 1)  # for summing loss rate
 
-        loss = loss_rate(t_range[0], var, frozen_var)
+        loss = loss_rate(t_range[0], var, *args)
 
         for ind, t in enumerate(t_range[:-1]):
-            var = step(func, t, var, frozen_var, step_size)
-            dloss = loss_rate(t_range[ind + 1], var, frozen_var)
+            var = step(func, t, var, step_size, *args)
+            dloss = loss_rate(t_range[ind + 1], var, *args)
             if simpsons_rule and ind % 2 == 0:
                 loss += 4 * dloss
             else:
@@ -84,31 +85,24 @@ def odeint(func, t_span, var0, frozen_var, step_size=1e-3, method='RK4',
         else:
             loss *= (step_size / 2)
         return var, loss
+    # End of block if loss_rate is callable
+
+    for t in t_range[:-1]:
+        var = step(func, t, var, step_size, *args)
+
+    return var
 
 
-def euler_step(func, t, var, frozen_var, dt):
+def euler_step(func, t, var, dt, *args):
     """Perform a single Euler step."""
-    return var + func(t, var, frozen_var) * dt
+    return var + func(t, var, *args) * dt
 
 
-def rk4_step(func, t, var, frozen_var, dt):
+def rk4_step(func, t, var, dt, *args):
     """Perform a single Runge-Kutta-4 step."""
     half_dt = dt / 2
-    k_1 = func(t, var, frozen_var)
-    k_2 = func(t + half_dt, var + half_dt * k_1, frozen_var)
-    k_3 = func(t + half_dt, var + half_dt * k_2, frozen_var)
-    k_4 = func(t + dt, var + dt * k_3, frozen_var)
+    k_1 = func(t, var, *args)
+    k_2 = func(t + half_dt, var + half_dt * k_1, *args)
+    k_3 = func(t + half_dt, var + half_dt * k_2, *args)
+    k_4 = func(t + dt, var + dt * k_3, *args)
     return var + (k_1 + 2 * k_2 + 2 * k_3 + k_4) * (dt / 6)
-
-
-def autonomous_rk4(func, var0, frozen_var, step_size=1e-4, num_steps=1):
-    r"""Integrate an `autonomous` system of ODEs using Runge-Kutta 4 method."""
-    eps = step_size
-    var = var0
-    for n in range(num_steps):
-        k_1 = func(var, frozen_var)
-        k_2 = func(var + eps / 2 * k_1, frozen_var)
-        k_3 = func(var + eps / 2 * k_2, frozen_var)
-        k_4 = func(var + eps * k_3, frozen_var)
-        var = var + (k_1 + 2 * k_2 + 2 * k_3 + k_4) * (eps / 6)
-    return var

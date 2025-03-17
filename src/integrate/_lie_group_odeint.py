@@ -7,9 +7,10 @@ import torch
 
 
 # =============================================================================
-def lie_group_odeint(func, t_span, var0, frozen_var,
-        step_size=1e-3, method='RK4:SU(n)', loss_rate=None
-        ):
+def lie_group_odeint(
+    func, t_span, var0, args=None, step_size=1e-3, method='RK4:SU(n)',
+    loss_rate=None
+):
     r"""Integrate a system of ODEs of the form::
 
         dU / dt = f(t, U; p) = F(t, U; p) U
@@ -27,7 +28,7 @@ def lie_group_odeint(func, t_span, var0, frozen_var,
         First and second items are the initial and terminal flow times.
     var0: tensor
         Initial state variable, i.e. the initial value of matrix ``U``.
-    frozen_var: tensor
+    args: tuple[tensor]
         The parameters specifying the system.
     step_size: float
         The absolute size of increament in the flow time ``t`` at each step
@@ -45,22 +46,22 @@ def lie_group_odeint(func, t_span, var0, frozen_var,
         step = special_unitary_rk4_step
     elif method == 'RK4:SU(n):aug':
         step = augmented_special_unitary_rk4_step
-    elif method == 'RK3:u(n):auto':
-        step = unitary_autonomous_rk3_step
-    elif method == 'Euler:u(n)':
-        step = unitary_euler_step
+    elif method == 'RK3:auto':
+        step = lie_autonomous_rk3_step
+    elif method == 'Euler':
+        step = lie_euler_step
     else:
         raise ValueError("other methods are not implemented yet")
 
     return odeint(
-            func, t_span, var0, frozen_var, step_size=step_size, method=step,
+            func, t_span, var0, args=args, step_size=step_size, method=step,
             loss_rate=loss_rate
             )
 
 
 # =============================================================================
-def augmented_special_unitary_rk4_step(func, t, var, frozen_var, dt):
-    delta, d_other = delta_from_rk4_step(func, t, var, frozen_var, dt).tuple
+def augmented_special_unitary_rk4_step(func, t, var, dt, *args):
+    delta, d_other = delta_from_rk4_step(func, t, var, dt, *args).tuple
     var, other = var.tuple
     var = construct_rk4_special_unitary(delta @ var.adjoint()) @ var
     other = other + d_other
@@ -68,8 +69,8 @@ def augmented_special_unitary_rk4_step(func, t, var, frozen_var, dt):
 
 
 # =============================================================================
-def special_unitary_rk4_step(func, t, var, frozen_var, dt):
-    """Perform a single Runge-Kutta-4 step for special unitary `var`.
+def special_unitary_rk4_step(func, t, var, dt, *args):
+    r"""Perform a single Runge-Kutta-4 step for special unitary `var`.
     The output `var` is by contruction special unitary too.
 
     RK4 method gives
@@ -80,12 +81,12 @@ def special_unitary_rk4_step(func, t, var, frozen_var, dt):
 
     We rewrite the coefficient of ``U_t`` as a special unitary matrix.
     """
-    eps = delta_from_rk4_step(func, t, var, frozen_var, dt) @ var.adjoint()
+    eps = delta_from_rk4_step(func, t, var, dt, *args) @ var.adjoint()
     return construct_rk4_special_unitary(eps) @ var
 
 
 def construct_rk4_special_unitary(eps):
-    """Project ``I + \epsilon + O(\epsilon^5)`` to a special unitary matrix."""
+    r"""Project `I + \epsilon + O(\epsilon^5)` to a special unitary matrix."""
     dummy = eps
     exponent = dummy
     for power in range(2, 5):
@@ -95,25 +96,24 @@ def construct_rk4_special_unitary(eps):
     return torch.matrix_exp(anti_hermitian_traceless(exponent))
 
 
-def delta_from_rk4_step(func, t, var, frozen_var, dt):
+def delta_from_rk4_step(func, t, var, dt, *args):
     """Calculate the shift in var obtained from a single Runge-Kutta-4 step."""
     half_dt = dt / 2
-    k_1 = func(t, var, frozen_var)
-    k_2 = func(t + half_dt, var + half_dt * k_1, frozen_var)
-    k_3 = func(t + half_dt, var + half_dt * k_2, frozen_var)
-    k_4 = func(t + dt, var + dt * k_3, frozen_var)
+    k_1 = func(t, var, *args)
+    k_2 = func(t + half_dt, var + half_dt * k_1, *args)
+    k_3 = func(t + half_dt, var + half_dt * k_2, *args)
+    k_4 = func(t + dt, var + dt * k_3, *args)
     return (k_1 + 2 * k_2 + 2 * k_3 + k_4) * (dt / 6)
 
 
 def anti_hermitian_traceless(mtrx):
     mtrx = (mtrx - mtrx.adjoint()) / 2.
-    mu = torch.mean(torch.linalg.diagonal(mtrx), dim=-1, keepdim=True)
-    mu = torch.diag_embed(torch.repeat_interleave(mu, mtrx.shape[-1], dim=-1))
-    return mtrx - mu
+    reduced_trace = mtrx.diagonal(dim1=-2, dim2=-1).mean(dim=-1, keepdim=True)
+    return mtrx - torch.diag_embed(reduced_trace.expand(mtrx.shape[:-1]))
 
 
 # =============================================================================
-def unitary_autonomous_rk3_step(algebra_func, t, var, frozen_var, step_size):
+def lie_autonomous_rk3_step(algebra_func, t, var, dt, *args):
     """Peforms one step of Runge-Kutta 3 (?) method to integrate a system of
     integrate a system of ODEs of the form::
 
@@ -129,19 +129,19 @@ def unitary_autonomous_rk3_step(algebra_func, t, var, frozen_var, step_size):
     .. _arXiv:1006.4518: https://arxiv.org/abs/1006.4518
     """
     for ind in range(3):
-        func_value = algebra_func(t, var, frozen_var)  # F(t, U; p)
+        func_value = algebra_func(t, var, *args)  # F(t, U; p)
         # Below, zee = eps * Z defined in (C.1) & (1.4) of [arXiv:1006.4518]
         if ind == 0:
-            zee = (1 / 4 * step_size) * func_value
+            zee = (1 / 4 * dt) * func_value
         elif ind == 1:
-            zee = (8 / 9 * step_size) * func_value - (17 / 9) * zee
+            zee = (8 / 9 * dt) * func_value - (17 / 9) * zee
         else:
-            zee = (3 / 4 * step_size) * func_value - zee
+            zee = (3 / 4 * dt) * func_value - zee
         var = torch.matrix_exp(zee) @ var
     return var
 
 
 # =============================================================================
-def unitary_euler_step(algebra_func, t, var, frozen_var, step_size):
+def lie_euler_step(algebra_func, t, var, dt, *args):
     """Perform a single Euler step for unitary matrices."""
-    return torch.matrix_exp(algebra_func(t, var, frozen_var) * step_size) @ var
+    return torch.matrix_exp(algebra_func(t, var, *args) * dt) @ var

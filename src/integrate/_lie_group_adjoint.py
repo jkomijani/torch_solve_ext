@@ -23,11 +23,12 @@ class LieGroupAdjODEflow_(torch.nn.Module):
 
     See `LieGroupODEflow` for description of the class.
     """
-    # TODO: change such that `func` need not be a subclass of `DynamcisAdjWrapper`.
+    # TODO: change so that `func` need not be a subclass of DynamcisAdjWrapper.
 
-    def __init__(self, func, t_span,
-            methods=['RK4:SU(n)', 'RK4:SU(n):aug'], **odeint_kwargs
-            ):
+    def __init__(
+        self, func, t_span,
+        methods=['RK4:SU(n)', 'RK4:SU(n):aug'], **odeint_kwargs
+    ):
 
         assert isinstance(func, LieGroupDynamicsAdjWrapper)
 
@@ -39,15 +40,23 @@ class LieGroupAdjODEflow_(torch.nn.Module):
             ftpartial(lie_group_odeint, method=methods[1], **odeint_kwargs)
             ]
 
-    def forward(self, var, frozen_var=None, log0=0):
+    def forward(self, var, args=None, log0=0):
+
+        frozen_var = () if args is None else args
+
         params = self.func.params_
+
         var, logj = LieGroupAdjointWrapper_.apply(
            self.odeints, self.func, self.t_span, var, frozen_var, *params
            )
         return var, logj + log0
 
-    def reverse(self, var, frozen_var=None, log0=0):
+    def reverse(self, var, args=None, log0=0):
+
+        frozen_var = () if args is None else args
+
         params = self.func.params_
+
         var, logj = LieGroupAdjointWrapper_.apply(
            self.odeints, self.func, self.t_span[::-1], var, frozen_var, *params
            )
@@ -69,7 +78,7 @@ class LieGroupAdjointWrapper_(torch.autograd.Function):
         assert isinstance(func, LieGroupDynamicsAdjWrapper)
 
         var, logj = odeints[0](
-                func.forward, t_span, var, frozen_var,
+                func.forward, t_span, var, args=frozen_var,
                 loss_rate=func.calc_logj_rate
                 )
 
@@ -164,7 +173,8 @@ class LieGroupDynamicsAdjWrapper(torch.nn.Module, ABC):
 
     def calc_logj_rate(self, t, var, frozen_var=None):
         """Return ``Re Tr (df / dx)`` as the rate of ``log(J)``."""
-        func = lambda var: self.forward(t, var, frozen_var)
+        def func(var):
+            return self.forward(t, var, frozen_var)
         return trace_complex_df_dx(func, var)
 
     def aug_reverse(self, t, aug_var, aug_frozen_var):

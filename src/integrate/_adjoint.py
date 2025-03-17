@@ -9,7 +9,7 @@ from ._odeint import odeint
 
 
 # =============================================================================
-class AdjODEflow_(torch.nn.Module):
+class AdjODEflow_(torch.nn.Module):  # pylint: disable=invalid-name
     """A `Module` for evolution of state variables governed by ODEs.
 
     Similar to `ODEflow`, but it also returns the logarithm of Jacobian of
@@ -20,7 +20,8 @@ class AdjODEflow_(torch.nn.Module):
 
     See `ODEflow` for description of the class.
     """
-    # TODO: change such that `func` need not be a subclass of `DynamcisAdjWrapper`.
+    # TODO: change so that `func` need not be a subclass of DynamcisAdjWrapper.
+    # TODO: odeint of forward & backward do not need to be the same.
 
     def __init__(self, func, t_span, **odeint_kwargs):
 
@@ -30,16 +31,24 @@ class AdjODEflow_(torch.nn.Module):
         self.func = func
         self.t_span = t_span
         self.odeint = functools.partial(odeint, **odeint_kwargs)
-    
-    def forward(self, var, frozen_var=None, log0=0):
+
+    def forward(self, var, args=None, log0=0):
+
+        frozen_var = () if args is None else args
+
         params = self.func.params_
+
         var, logj = AdjointWrapper_.apply(
             self.odeint, self.func, self.t_span, var, frozen_var, *params
             )
         return var, logj + log0
 
-    def reverse(self, var, frozen_var=None, log0=0):
+    def reverse(self, var, args=None, log0=0):
+
+        frozen_var = () if args is None else args
+
         params = self.func.params_
+
         var, logj = AdjointWrapper_.apply(
             self.odeint, self.func, self.t_span[::-1], var, frozen_var, *params
             )
@@ -61,7 +70,7 @@ class AdjointWrapper_(torch.autograd.Function):
         assert isinstance(func, DynamcisAdjWrapper)
 
         var, logj = odeint(
-                func.forward, t_span, var, frozen_var,
+                func.forward, t_span, var, args=frozen_var,
                 loss_rate=func.calc_logj_rate
                 )
 
@@ -90,12 +99,12 @@ class AdjointWrapper_(torch.autograd.Function):
 
         fzn = frozen_var
         if len(params) == 0 and (fzn is None or not fzn.requires_grad):
-            aug_var = odeints[1](
+            aug_var = odeint(
                 func.aug_reverse, t_span[::-1], aug_var, aug_frozen_var
                 )
             aug_loss = None
         else:
-            aug_var, aug_loss = odeints[1](
+            aug_var, aug_loss = odeint(
                 func.aug_reverse, t_span[::-1], aug_var, aug_frozen_var,
                 loss_rate=func.calc_grad_params_rate
                 )
@@ -130,7 +139,8 @@ class DynamcisAdjWrapper(torch.nn.Module, ABC):
 
     def calc_logj_rate(self, t, var, frozen_var=None):
         """Return the trace of ``df / dx`` as the rate of ``log(J)``."""
-        func = lambda var: self.forward(t, var, frozen_var)
+        def func(var):
+            return self.forward(t, var, frozen_var)
         return trace_df_dx(func, var)
 
     def aug_reverse(self, t, aug_var, aug_frozen_var):
@@ -271,7 +281,4 @@ class TupleVar:
 
     @property
     def shape(self):
-        def shape(v):
-            try: return v.shape
-            except: return 1
-        return tuple([shape(var) for var in self.tuple])
+        return tuple(getattr(var, "shape", 1) for var in self.tuple)

@@ -18,7 +18,7 @@ class ODEflow(torch.nn.Module):
     describing the state of the system at time ``t``, and ``p`` is a set of
     fixed parameters that specify the flow (dynamic) of the system. The fixed
     parameters can either be embeded in the definition of ``f`` or can be
-    explicitely given as `frozen_var`.
+    explicitely given as `args`.
 
     Parameters
     ----------
@@ -35,12 +35,12 @@ class ODEflow(torch.nn.Module):
         self.func = func
         self.t_span = t_span
         self.odeint = functools.partial(odeint, **odeint_kwargs)
-    
-    def forward(self, var, frozen_var=None):
-        return self.odeint(self.func, self.t_span, var, frozen_var)
 
-    def reverse(self, var, frozen_var=None):
-        return self.odeint(self.func, self.t_span[::-1], var, frozen_var)
+    def forward(self, var, args=None):
+        return self.odeint(self.func, self.t_span, var, args=args)
+
+    def reverse(self, var, args=None):
+        return self.odeint(self.func, self.t_span[::-1], var, args=args)
 
 
 class ODEflow_(ODEflow):
