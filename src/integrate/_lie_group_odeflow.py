@@ -1,32 +1,43 @@
 # Copyright (c) 2024 Javad Komijani
 
-from ._lie_group_odeint import lie_group_odeint
+"""
+This module defines classes for integrating systems of ordinary differential
+equations (ODEs) governing Lie-group states using PyTorch. It includes
+functionality for evolving state variables and computing the logarithm of the
+Jacobian determinant of transformations.
+"""
 
-import torch
 import functools
+import torch
+
+from ._lie_group_odeint import lie_group_odeint
+from ..stats import hutchinson_estimator
 
 
 class LieGroupODEflow(torch.nn.Module):
-    """A `Module` for evolution of Lie-group state variables governed by ODEs.
+    """
+    A PyTorch module for evolving Lie-group state variables via ODEs.
 
-    Given a derivative function ``f``, an instance of this class flows the
-    state of the system according to::
+    This class integrates a system of ODEs using a specified derivative
+    function. Given a function `f`, an instance of this class evolves the
+    system's state according to:
 
-        dU / dt = f(t, U; p) = F(t, U; p) U
+        dU / dt = f(t, U; p) = F(t, U; p) * U
 
-    where ``U = U(t)`` belongs to a Lie group and ``F(t, U; p)`` belongs to
-    corresponding algebra. Here ``t`` is the flow time and ``p`` is used to
-    denote fixed parameters that specify the flow (dynamic) of the system.
+    where:
+        - `U = U(t)` is an element of a Lie group,
+        - `F(t, U; p)` belongs to the corresponding Lie algebra,
+        - `t` is the flow time,
+        - `p` represents fixed parameters influencing the dynamics.
 
-    Parameters
-    ----------
-    func: callable
-        Computes ``f(t, U; p)`` or ``F(t, U; p)``; see ``lie_group_odeint``.
-        (Default is ``f``.)
-    t_span: list/tuple
-        First and second items are the initial and terminal flow times.
-    odeint_kwargs: optional kwargs
-        Keyword arguments to be passed to the ODE integrator.
+    Fixed parameters can be embedded in `f` or passed explicitly via `args`.
+
+    Args:
+        - func (Callable): A function computing `f(t, U; p)` or `F(t, U; p)`.
+          See `lie_group_odeint`. (Default is `f`.)
+        - t_span (Tuple[float, float]): Tuple specifying the initial and final
+          integration times.
+        - **odeint_kwargs: Additional keyword arguments for the ODE solver.
     """
 
     def __init__(self, func, t_span, **odeint_kwargs):
@@ -36,25 +47,65 @@ class LieGroupODEflow(torch.nn.Module):
         self.odeint = functools.partial(lie_group_odeint, **odeint_kwargs)
 
     def forward(self, var, args=None):
+        """
+        Evolves the system from initial to final time in `t_span`.
+
+        Args:
+            var (torch.Tensor): The initial state of the system.
+            args (Optional[Tuple]): Additional arguments for `func`.
+
+        Returns:
+            torch.Tensor: The evolved system state at the final time.
+        """
         return self.odeint(self.func, self.t_span, var, args=args)
 
     def reverse(self, var, args=None):
+        """
+        Evolves the system in reverse, from final to initial time.
+
+        Args:
+            var (torch.Tensor): The state of the system at the final time.
+            args (Optional[Tuple]): Additional arguments for `func`.
+
+        Returns:
+            torch.Tensor: The evolved system state at the final time.
+        """
         return self.odeint(self.func, self.t_span[::-1], var, args=args)
 
 
-class LieGroupODEflow_(LieGroupODEflow):
-    """A `Module` for evolution of Lie-group state variables governed by ODEs.
+class LieGroupODEflow_(LieGroupODEflow):  # pylint: disable=invalid-name
+    """
+    An extension of `LieGroupODEflow` that also returns the log-Jacobian of the
+    flow.
 
-    Similar to `LieGroupODEflow`, but it also returns the logarithm of Jacobian
-    of transformation provided that `func` has `calc_logj_rate` attribute.
+    This class evolves a system of ODEs while also tracking the log-determinant
+    of the Jacobian transformation. If `func` has a method `calc_logj_rate`, it
+    is used to compute the log-Jacobian rate directly. Otherwise, the Jacobian
+    trace is estimated using the Hutchinson estimator with a specified number
+    of samples.
 
-    See `LieGroupODEflow` for description of the class.
+    If `num_samples` is `None`, the Hutchinson estimator is not actually used.
+    Instead, the Jacobian trace is computed exactly via automatic
+    differentiation, which can be computationally expensive in high dimensions.
+
+    Args:
+        - func (Callable): A function computing `f(t, U; p)` or `F(t, U; p)`.
+          See `lie_group_odeint`. (Default is `f`.)
+        - t_span (Tuple[float, float]): A tuple specifying initial and final
+          times.
+        - num_samples (Optional[int | None]): The number of random samples used
+          in the Hutchinson estimator. If `None`, the Jacobian trace is
+          computed exactly. Defaults to 1.
+        - **odeint_kwargs: Additional keyword arguments for the ODE solver.
     """
 
-    def __init__(self, func, t_span, **odeint_kwargs):
+    def __init__(self, func, t_span, num_samples=1, **odeint_kwargs):
 
-        assert hasattr(func, 'calc_logj_rate')
+        if hasattr(func, 'calc_logj_rate'):
+            loss_rate = func.calc_logj_rate
+        else:
+            def loss_rate(t, var, *args):
+                return hutchinson_estimator(lambda x: func(t, x, *args),
+                                            var, num_samples)
 
-        super().__init__(
-                func, t_span, loss_rate=func.calc_logj_rate, **odeint_kwargs
-                )
+        super().__init__(func, t_span, loss_rate=loss_rate, **odeint_kwargs)
