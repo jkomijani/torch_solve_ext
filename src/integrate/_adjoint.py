@@ -5,10 +5,10 @@ Defines the AdjODEflow_ module for adjoint-based ODE integration with
 log-Jacobian tracking.
 """
 
-import torch
-import functools
-
 from abc import abstractmethod, ABC
+
+import functools
+import torch
 
 from ._odeint import odeint
 from ..stats import hutchinson_estimator
@@ -67,8 +67,7 @@ class AdjODEflow_(torch.nn.Module):  # pylint: disable=invalid-name
         Args:
             var (torch.Tensor): Initial state variable to evolve.
             args (Optional[Tuple[torch.Tensor]]): Frozen variables of the
-                dynamics (non-evolving parameters or context). Defaults to
-                None.
+                dynamics. Defaults to None. At most one argument is supported.
             log0 (float): Initial value of the log-determinant of the Jacobian.
                 Defaults to 0.
 
@@ -93,8 +92,7 @@ class AdjODEflow_(torch.nn.Module):  # pylint: disable=invalid-name
         Args:
             var (torch.Tensor): Final state variable to evolve backward.
             args (Optional[Tuple[torch.Tensor]]): Frozen variables of the
-                dynamics (non-evolving parameters or context). Defaults to
-                None.
+                dynamics. Defaults to None. At most one argument is supported.
             log0 (float): Initial value of the log-determinant of the Jacobian.
                 Defaults to 0.
 
@@ -207,24 +205,55 @@ class AdjointWrapper_(torch.autograd.Function):  # pylint: disable=invalid-name
 
 # =============================================================================
 class DynamicsAdjModule(torch.nn.Module, ABC):
-    """Any function that is used for defining the dynamics of an ODE flow with
-    the adjoint method must be a subclass of this class.
+    """
+    Abstract base class for ODE systems with adjoint backpropagation and
+    log-Jacobian tracking, similar to `AdjODEflow_`.
 
-    The method `calc_logj_rate` method calculates `Tr (df / dx)` is estimated
-    using the Hutchinson estimator with a specified number of samples.
+    This class is a subclass of `torch.nn.Module` and provides the necessary
+    structure for defining ODE systems that can be solved using adjoint-based
+    differentiation. It is used in conjunction with modules like `AdjODEflow_`
+    to compute gradients, perform augmented reverse integration, and calculate
+    the log-Jacobian rate of the flow.
+
+    Key methods:
+        - `forward`: Computes the time derivative of the state variable
+          (abstract).
+        - `calc_logj_rate`: Computes the log-Jacobian rate using the Hutchinson
+          estimator.
+        - `aug_reverse`: Performs augmented reverse integration for adjoint
+          backpropagation.
+        - `calc_grad_params_rate`: Computes the gradient of parameters.
+
+    Args:
+        num_samples (int, optional): Number of samples used for the Hutchinson
+          estimator to approximate the Jacobian trace. If `None`, the Jacobian
+          trace is computed exactly. Defaults to 1.
     """
 
     def __init__(self, num_samples=1):
-
         super().__init__()
         self.num_samples = num_samples
 
     @abstractmethod
     def forward(self, t, var, *frozen_var):
-        """The function defining the evolution of the state variable."""
+        """
+        Abstract method to compute the time derivative of the state variable.
+        """
 
     def calc_logj_rate(self, t, var, *frozen_var):
-        """Return the trace of `df / dx` as the rate of `log(J)`."""
+        """
+        Computes and returns the log-Jacobian rate of the system's flow using
+        the Hutchinsonestimator to approximate the trace of `df/dx` for volume
+        scaling.
+
+        Args:
+            t (float): Current time.
+            var (torch.Tensor): Current state variable.
+            *frozen_var: Additional frozen variables for the system's dynamics.
+
+        Returns:
+            torch.Tensor: The estimated log-Jacobian rate of the flow.
+        """
         logj_rate = hutchinson_estimator(
             lambda x: self.forward(t, x, *frozen_var),
             var,
@@ -256,14 +285,13 @@ class DynamicsAdjModule(torch.nn.Module, ABC):
         return TupleVar(var_dot, grad_var_dot)
 
     def calc_grad_params_rate(self, t, aug_var, aug_frozen_var):
+        """Computes the rate of gradeint with respect to the parameters."""
         var, grad_var = aug_var.tuple
         frozen_var, grad_logj, *params = aug_frozen_var.tuple
 
-        if (frozen_var is None) or (not frozen_var.requires_grad):
-            params = tuple(self.params_)
-        else:
+        if (frozen_var is not None) and frozen_var.requires_grad:
             frozen_var = frozen_var.detach().requires_grad_(True)
-            params = (frozen_var, *self.params_)
+            params = (frozen_var, *params)
 
         with torch.enable_grad():
             var = var.detach()
@@ -283,23 +311,60 @@ class DynamicsAdjModule(torch.nn.Module, ABC):
 
     @property
     def params_(self):
+        """Returns all parameters of the module as a list."""
         return [par for par in self.parameters() if par.requires_grad]
 
 
 # =============================================================================
 class DynamicsAdjWrapper(DynamicsAdjModule):
+    """
+    A wrapper class for a function that defines the ODE system dynamics,
+    enabling adjoint-based backpropagation with log-Jacobian tracking.
+
+    This class wraps a function that computes the time derivative of the
+    state variable in an ODE system. It provides the `forward` method
+    directly from the wrapped function. If the wrapped function does not
+    implement `calc_logj_rate`, the methods from `DynamicsAdjModule`, such
+    as `calc_logj_rate`, are inherited.
+
+    Args:
+        func (Callable): A function `f(t, y, *args)` that computes the time
+            derivative of the state variable `y` at time `t`.
+        num_samples (int, optional): The number of samples for the Hutchinson
+            estimator when computing the Jacobian trace. Defaults to 1.
+
+    Methods:
+        - `forward`: Directly uses the provided function to compute the time
+          derivative of the state variable.
+        - `calc_logj_rate`: Inherited from `DynamicsAdjModule` if the wrapped
+          function doesn't define a `calc_logj_rate` method. If the function
+          has its own `calc_logj_rate`, that will be used.
+    """
 
     def __init__(self, func, num_samples=1):
-
-        super().__init__()
+        super().__init__(num_samples)
         self.func = func
-        self.num_samples = num_samples
 
+        # If the function has its own `calc_logj_rate`, use it.
         if hasattr(func, 'calc_logj_rate'):
             self.calc_logj_rate = func.calc_logj_rate
 
     def forward(self, t, var, *args):
-        """The function defining the evolution of the state variable."""
+        """
+        Computes the time derivative of the state variable by calling the
+        wrapped function.
+
+        This method simply delegates the call to the wrapped `func` to compute
+        the time derivative of the state variable `var` at time `t`.
+
+        Args:
+            t (float): The current time.
+            var (torch.Tensor): The current state variable.
+            *args: Additional arguments passed to the wrapped function.
+
+        Returns:
+            torch.Tensor: The time derivative of the state variable.
+        """
         return self.func(t, var, *args)
 
 
@@ -316,39 +381,85 @@ def tie_adjoints(x_bar, x_dot):
 
 # =============================================================================
 class TupleVar:
+    """
+    A lightweight container for elementwise algebraic operations on a tuple of
+    variables.
+
+    This class wraps a tuple of objects (typically tensors or scalars) and
+    supports basic arithmetic operations such as addition, subtraction,
+    scalar multiplication, and division. Operations are applied elementwise
+    across the contained variables, making it useful for manipulating multiple
+    related state variables in ODE or optimization contexts.
+    """
 
     def __init__(self, *args):
+        """
+        Initializes a TupleVar from a sequence of variables.
+
+        Args:
+            *args: A sequence of variables (e.g., tensors, scalars) to store.
+        """
         self.tuple = args
 
     def __str__(self):
+        """
+        Returns a string representation of the TupleVar.
+        """
         return f"TupleVar:\n{self.tuple}"
 
     def __repr__(self):
+        """
+        Returns a developer-friendly string representation.
+        """
         return self.__str__()
 
     def __pos__(self):
+        """
+        Unary plus: returns self.
+        """
         return self
 
     def __neg__(self):
+        """
+        Unary negation: returns a new TupleVar with negated elements.
+        """
         return TupleVar(*[-var for var in self.tuple])
 
     def __add__(self, other):
+        """
+        Elementwise addition with another TupleVar.
+        """
         x = [var1 + var2 for var1, var2 in zip(self.tuple, other.tuple)]
         return TupleVar(*x)
 
     def __sub__(self, other):
+        """
+        Elementwise subtraction with another TupleVar.
+        """
         x = [var1 - var2 for var1, var2 in zip(self.tuple, other.tuple)]
         return TupleVar(*x)
 
     def __mul__(self, other):
+        """
+        Scalar multiplication (elementwise).
+        """
         return TupleVar(*[var * other for var in self.tuple])
 
     def __truediv__(self, other):
+        """
+        Scalar division (elementwise).
+        """
         return TupleVar(*[var / other for var in self.tuple])
 
     def __rmul__(self, other):
+        """
+        Right-hand scalar multiplication (elementwise).
+        """
         return self.__mul__(other)
 
     @property
     def shape(self):
+        """
+        Returns a tuple of shapes of the contained variables.
+        """
         return tuple(getattr(var, "shape", 1) for var in self.tuple)
