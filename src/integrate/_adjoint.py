@@ -1,4 +1,9 @@
-# Copyright (c) 2024 Javad Komijani
+# Copyright (c) 2024-2025 Javad Komijani
+
+"""
+Defines the AdjODEflow_ module for adjoint-based ODE integration with
+log-Jacobian tracking.
+"""
 
 import torch
 import functools
@@ -6,74 +11,152 @@ import functools
 from abc import abstractmethod, ABC
 
 from ._odeint import odeint
+from ..stats import hutchinson_estimator
 
 
 # =============================================================================
 class AdjODEflow_(torch.nn.Module):  # pylint: disable=invalid-name
-    """A `Module` for evolution of state variables governed by ODEs.
-
-    Similar to `ODEflow`, but it also returns the logarithm of Jacobian of
-    transformation provided that `func` has `calc_logj_rate` attribute.
-    More importantly, this class provides a backward propagation of derivatives
-    using the adjoint method. To this end, `func` is required be a subclass of
-    `DynamcisAdjWrapper`.
-
-    See `ODEflow` for description of the class.
     """
-    # TODO: change so that `func` need not be a subclass of DynamcisAdjWrapper.
-    # TODO: odeint of forward & backward do not need to be the same.
+    A module for solving ODEs with adjoint-based backprop and log-Jacobian
+    tracking.
 
-    def __init__(self, func, t_span, **odeint_kwargs):
+    AdjODEflow_ is similar to `ODEflow_`, which extends `ODEflow` by also
+    returning the log-determinant of the Jacobian of the flow. While `ODEflow`
+    only evolves the state variable, `ODEflow_` and `AdjODEflow_` additionally
+    compute the log-Jacobian of the transformation.
 
-        assert isinstance(func, DynamcisAdjWrapper)
+    This class uses the adjoint method to compute gradients during backward
+    passes, which is memory efficient for long sequences.
+
+    If `func` defines a method `calc_logj_rate`, it is used directly to compute
+    the log-Jacobian rate. Otherwise, the trace of the Jacobian is estimated
+    using the Hutchinson estimator with a given number of random samples.
+
+    If `num_samples` is `None`, the Jacobian trace is computed exactly via
+    automatic differentiation, which may be slow in high-dimensional settings.
+
+    If `func` is not an instance of `DynamicsAdjModule`, it will automatically
+    be wrapped with `DynamicsAdjWrapper`.
+
+    Args:
+        - func (Callable): A function `f(t, y, *args)` that computes the time
+          derivative of the state variable `y` at time `t`.
+        - t_span (Tuple[float, float]): A tuple specifying initial and final
+          times.
+        - num_samples (Optional[int | None]): The number of random samples used
+          in the Hutchinson estimator. If `None`, the Jacobian trace is
+          computed exactly. Defaults to 1.
+        - **odeint_kwargs: Additional keyword arguments for the ODE solver.
+    """
+
+    def __init__(self, func, t_span, num_samples=1, **odeint_kwargs):
+        """Initializes the AdjODEflow_ module."""
 
         super().__init__()
-        self.func = func
+        if isinstance(func, DynamicsAdjModule):
+            self.func = func
+        else:
+            self.func = DynamicsAdjWrapper(func, num_samples)
         self.t_span = t_span
         self.odeint = functools.partial(odeint, **odeint_kwargs)
 
     def forward(self, var, args=None, log0=0):
+        """
+        Evolves the state forward in time and accumulates the log-Jacobian.
 
-        frozen_var = () if args is None else args
+        Args:
+            var (torch.Tensor): Initial state variable to evolve.
+            args (Optional[Tuple[torch.Tensor]]): Frozen variables of the
+                dynamics (non-evolving parameters or context). Defaults to
+                None.
+            log0 (float): Initial value of the log-determinant of the Jacobian.
+                Defaults to 0.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: The evolved state and the
+            accumulated log-determinant of the Jacobian.
+        """
+
+        frozen_var = args
 
         params = self.func.params_
 
         var, logj = AdjointWrapper_.apply(
             self.odeint, self.func, self.t_span, var, frozen_var, *params
-            )
+        )
         return var, logj + log0
 
     def reverse(self, var, args=None, log0=0):
+        """
+        Evolves the state backward in time and accumulates the log-Jacobian.
 
-        frozen_var = () if args is None else args
+        Args:
+            var (torch.Tensor): Final state variable to evolve backward.
+            args (Optional[Tuple[torch.Tensor]]): Frozen variables of the
+                dynamics (non-evolving parameters or context). Defaults to
+                None.
+            log0 (float): Initial value of the log-determinant of the Jacobian.
+                Defaults to 0.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: The reversed state and the
+            accumulated log-determinant of the Jacobian.
+        """
+
+        frozen_var = args
 
         params = self.func.params_
 
         var, logj = AdjointWrapper_.apply(
             self.odeint, self.func, self.t_span[::-1], var, frozen_var, *params
-            )
+        )
         return var, logj + log0
 
 
 # =============================================================================
-class AdjointWrapper_(torch.autograd.Function):
-    """A wrapper to run ``odeint`` with the adjoint method."""
-
-    # Because of the convention adopted by pytorch, ``frozen_var`` must be a
-    # tensor if its `grad` is meant to be returned, otherwise, it must be given
-    # as a tuple of tensors.
+class AdjointWrapper_(torch.autograd.Function):  # pylint: disable=invalid-name
+    """
+    A custom autograd Function to perform ODE integration using the adjoint
+    method. This wraps around `odeint`, allowing gradients to flow through the
+    integration.
+    """
 
     @staticmethod
     def forward(ctx, odeint, func, t_span, var, frozen_var, *params):
-        # `*params` should be given in order to calculate derivatives wrt them.
+        """
+        Forward pass using the ODE solver.
 
-        assert isinstance(func, DynamcisAdjWrapper)
+        Args:
+            ctx: Autograd context for saving information for backward pass.
+            odeint: The ODE integration function.
+            func: A DynamicsAdjModule instance defining the ODE system.
+            t_span: Time span for integration.
+            var: Initial state variable.
+            frozen_var: Auxiliary variables, potentially requiring gradients.
+            *params: Additional parameters to differentiate with respect to.
 
+        Returns:
+            var: The integrated state.
+            logj: Accumulated log-Jacobian determinant, if applicable.
+
+        NOTE:
+            1. `frozen_var` must be a tensor if its gradient is needed.
+            2. `*params` should be given explicitely in order to calculate the
+            derivatives with respect to them.
+        """
+        assert isinstance(func, DynamicsAdjModule), \
+            ("Expected `func` to be an instance of DynamicsAdjModule")
+
+        # Perform ODE integration
         var, logj = odeint(
-                func.forward, t_span, var, args=frozen_var,
-                loss_rate=func.calc_logj_rate
-                )
+            func.forward,
+            t_span,
+            var,
+            args=frozen_var,
+            loss_rate=func.calc_logj_rate,
+        )
 
+        # Save necessary tensors for the backward pass
         ctx.odeint = odeint
         ctx.func = func
         ctx.t_span = t_span
@@ -93,26 +176,27 @@ class AdjointWrapper_(torch.autograd.Function):
         t_span = ctx.t_span
         var, logj, frozen_var, *params = ctx.saved_tensors
 
-        # Define augmented variables & flow them in backward in time:
+        # Define augmented variable, which will flow backward in time:
         aug_var = TupleVar(var, grad_var)
+        # Define augmented frozen variable:
         aug_frozen_var = TupleVar(frozen_var, grad_logj, *params)
 
         fzn = frozen_var
         if len(params) == 0 and (fzn is None or not fzn.requires_grad):
             aug_var = odeint(
-                func.aug_reverse, t_span[::-1], aug_var, aug_frozen_var
+                func.aug_reverse, t_span[::-1], aug_var, args=aug_frozen_var
                 )
             aug_loss = None
         else:
             aug_var, aug_loss = odeint(
-                func.aug_reverse, t_span[::-1], aug_var, aug_frozen_var,
+                func.aug_reverse, t_span[::-1], aug_var, args=aug_frozen_var,
                 loss_rate=func.calc_grad_params_rate
                 )
 
         var, grad_var = aug_var.tuple
 
         if aug_loss is None:
-            grad_frozen_var, grad_params = None, []
+            grad_frozen_var, grad_params = None, ()
         elif (fzn is None or not fzn.requires_grad):
             grad_frozen_var, grad_params = None, aug_loss.tuple
         else:
@@ -122,26 +206,31 @@ class AdjointWrapper_(torch.autograd.Function):
 
 
 # =============================================================================
-class DynamcisAdjWrapper(torch.nn.Module, ABC):
+class DynamicsAdjModule(torch.nn.Module, ABC):
     """Any function that is used for defining the dynamics of an ODE flow with
     the adjoint method must be a subclass of this class.
 
-    The dynamics governing the flow of state variable is supposed to be defined
-    in `forward`, which is an abstract method should be defined in subclasses.
-    Although `calc_logj_rate` method calculates ``Tr (df / dx)``, it is in
-    general slow, and we recommend to redefine it in subclasses.
+    The method `calc_logj_rate` method calculates `Tr (df / dx)` is estimated
+    using the Hutchinson estimator with a specified number of samples.
     """
 
-    @abstractmethod
-    def forward(self, t, var, frozen_var=None):
-        """The function defining the evolution of the state variable."""
-        pass
+    def __init__(self, num_samples=1):
 
-    def calc_logj_rate(self, t, var, frozen_var=None):
-        """Return the trace of ``df / dx`` as the rate of ``log(J)``."""
-        def func(var):
-            return self.forward(t, var, frozen_var)
-        return trace_df_dx(func, var)
+        super().__init__()
+        self.num_samples = num_samples
+
+    @abstractmethod
+    def forward(self, t, var, *frozen_var):
+        """The function defining the evolution of the state variable."""
+
+    def calc_logj_rate(self, t, var, *frozen_var):
+        """Return the trace of `df / dx` as the rate of `log(J)`."""
+        logj_rate = hutchinson_estimator(
+            lambda x: self.forward(t, x, *frozen_var),
+            var,
+            self.num_samples
+        )
+        return logj_rate
 
     def aug_reverse(self, t, aug_var, aug_frozen_var):
         """Here `aug_var` contains the state variable and the adjoint state
@@ -197,6 +286,24 @@ class DynamcisAdjWrapper(torch.nn.Module, ABC):
         return [par for par in self.parameters() if par.requires_grad]
 
 
+# =============================================================================
+class DynamicsAdjWrapper(DynamicsAdjModule):
+
+    def __init__(self, func, num_samples=1):
+
+        super().__init__()
+        self.func = func
+        self.num_samples = num_samples
+
+        if hasattr(func, 'calc_logj_rate'):
+            self.calc_logj_rate = func.calc_logj_rate
+
+    def forward(self, t, var, *args):
+        """The function defining the evolution of the state variable."""
+        return self.func(t, var, *args)
+
+
+# =============================================================================
 def tie_adjoints(x_bar, x_dot):
     r"""returns :math:`Re(\bar{x}^* \circ \dot{x})`,
     which is equal to :math:`ReTr(\bar{x}^\dagger \dot{x})`
@@ -205,43 +312,6 @@ def tie_adjoints(x_bar, x_dot):
     """
     dim = list(range(1, x_dot.ndim))
     return torch.sum((x_bar.conj() * x_dot).real, dim=dim)
-
-
-def trace_df_dx(func, var):
-    """Calculates the trace of ``df(x) / dx`` for real variables."""
-
-    if torch.is_complex(var):
-        return trace_complex_df_dx(func, var)
-
-    # The following manipulations is for using torch.autograd.grad
-    if not var.requires_grad:
-        var = var.detach().requires_grad_(True)
-    x = var.reshape(var.shape[0], -1)
-    f = func(x.reshape(*var.shape)).sum(dim=0).reshape(-1)
-
-    trace = 0.
-    for ind in range(x.shape[1]):
-        trace += torch.autograd.grad(f[ind], x, retain_graph=True)[0][:, ind]
-
-    return trace
-
-
-def trace_complex_df_dx(func, var):
-    """Calculates the trace of ``df(x) / dx`` for complex variables."""
-
-    # The following manipulations is for using torch.autograd.grad
-    if not var.requires_grad:
-        var = var.detach().requires_grad_(True)
-    x = var.reshape(var.shape[0], -1).real
-    y = var.reshape(var.shape[0], -1).imag
-    f = func((x + 1j * y).reshape(*var.shape)).sum(dim=0).reshape(-1)
-
-    trace = 0.
-    for k in range(x.shape[1]):
-        trace += torch.autograd.grad(f[k].real, x, retain_graph=True)[0][:, k]
-        trace += torch.autograd.grad(f[k].imag, y, retain_graph=True)[0][:, k]
-
-    return trace
 
 
 # =============================================================================
