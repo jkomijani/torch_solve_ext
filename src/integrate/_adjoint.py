@@ -469,5 +469,36 @@ class TupleVar:
     def shape(self):
         """
         Returns a tuple of shapes of the contained variables.
+
+        This property scans through each element in the tuple and retrieves
+        the shape of each tensor. For non-tensor elements (including None),
+        it returns None as a default shape. The returned tuple contains the
+        shapes of all elements in the tuple, where each shape is either a
+        tensor's shape or None for non-tensors.
+
+        Returns:
+            tuple: A tuple containing the shapes of the contained variables.
+                   If an element is not a tensor, None is used as a placeholder
+                   for its shape.
+
+        Example:
+            If `self.tuple = (None, torch.randn(2, 3), torch.ones(4, 5))`,
+            the result of `shape` will be `(None, (2, 3), (4, 5))`.
         """
-        return tuple(getattr(var, "shape", 1) for var in self.tuple)
+        return tuple(getattr(var, "shape", None) for var in self.tuple)
+
+    @property
+    def device(self):
+        """
+        Returns the device of the first non-None tensor in the tuple, or None
+        if no tensors are found.
+
+        This property scans through the tuple and identifies the device of the
+        first tensor it encounters. If no tensors are present in the tuple, it
+        returns None.
+        """
+        for var in self.tuple:
+            if isinstance(var, torch.Tensor):
+                return var.device
+
+        return None
