@@ -273,8 +273,12 @@ class DynamicsAdjModule(torch.nn.Module, ABC):
         with torch.enable_grad():
             var = var.detach().requires_grad_(True)
 
-            var_dot = self.forward(t, var, frozen_var)
-            logj_dot = self.calc_logj_rate(t, var, frozen_var)
+            if frozen_var is None:
+                var_dot = self.forward(t, var)
+                logj_dot = self.calc_logj_rate(t, var)
+            else:
+                var_dot = self.forward(t, var, frozen_var)
+                logj_dot = self.calc_logj_rate(t, var, frozen_var)
             hamilton = torch.sum(
                     grad_logj * logj_dot + tie_adjoints(grad_var, var_dot)
                     )
@@ -296,8 +300,12 @@ class DynamicsAdjModule(torch.nn.Module, ABC):
         with torch.enable_grad():
             var = var.detach()
 
-            var_dot = self.forward(t, var, frozen_var)
-            logj_dot = self.calc_logj_rate(t, var, frozen_var)
+            if frozen_var is None:
+                var_dot = self.forward(t, var)
+                logj_dot = self.calc_logj_rate(t, var)
+            else:
+                var_dot = self.forward(t, var, frozen_var)
+                logj_dot = self.calc_logj_rate(t, var, frozen_var)
             hamilton = torch.sum(
                     grad_logj * logj_dot + tie_adjoints(grad_var, var_dot)
                     )
