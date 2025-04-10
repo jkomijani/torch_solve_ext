@@ -79,7 +79,7 @@ def hutchinson_estimator(
     # If `num_samples` is greater than 1, `retain_graph=True` is used to
     # retain the computation graph for multiple backward passes.
     grad_kwargs = {
-        'retain_graph': (num_samples > 1),
+        'retain_graph': requires_grad or (num_samples > 1),
         'create_graph': requires_grad
     }
 
