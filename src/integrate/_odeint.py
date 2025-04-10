@@ -60,7 +60,7 @@ def odeint(
 
     n_grid = 1 + abs(int((t_span[1] - t_span[0]) / step_size))
 
-    t_range = torch.linspace(*t_span, n_grid)
+    t_range = torch.linspace(*t_span, n_grid, device=var0.device)
     step_size = t_range[1] - t_range[0]  # update step_size
 
     var = var0
