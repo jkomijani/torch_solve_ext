@@ -14,7 +14,7 @@ from ._lie_group_odeint import lie_group_odeint
 from ..stats import hutchinson_estimator
 
 
-class LieGroupODEflow(torch.nn.Module):
+class LieODEflow(torch.nn.Module):
     """
     A PyTorch module for evolving Lie-group state variables via ODEs.
 
@@ -73,9 +73,9 @@ class LieGroupODEflow(torch.nn.Module):
         return self.odeint(self.func, self.t_span[::-1], var, args=args)
 
 
-class LieGroupODEflow_(LieGroupODEflow):  # pylint: disable=invalid-name
+class LieODEflow_(LieODEflow):  # pylint: disable=invalid-name
     """
-    An extension of `LieGroupODEflow` that also returns the log-Jacobian of the
+    An extension of `LieODEflow` that also returns the log-Jacobian of the
     flow.
 
     This class evolves a system of ODEs while also tracking the log-determinant
