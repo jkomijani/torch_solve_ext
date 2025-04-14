@@ -35,8 +35,8 @@ class AdjODEflow_(torch.nn.Module):  # pylint: disable=invalid-name
     If `num_samples` is `None`, the Jacobian trace is computed exactly via
     automatic differentiation, which may be slow in high-dimensional settings.
 
-    If `func` is not an instance of `DynamicsAdjModule`, it will automatically
-    be wrapped with `DynamicsAdjWrapper`.
+    If `func` is not an instance of `AdjModule`, it will automatically
+    be wrapped with `AdjModuleWrapper`.
 
     Args:
         - func (Callable): A function `f(t, y, *args)` that computes the time
@@ -53,12 +53,18 @@ class AdjODEflow_(torch.nn.Module):  # pylint: disable=invalid-name
         """Initializes the AdjODEflow_ module."""
 
         super().__init__()
-        if isinstance(func, DynamicsAdjModule):
+
+        if isinstance(func, AdjModule):
             self.func = func
         else:
-            self.func = DynamicsAdjWrapper(func, num_samples)
+            self.func = AdjModuleWrapper(func, num_samples)
+
         self.t_span = t_span
-        self.odeint = functools.partial(odeint, **odeint_kwargs)
+
+        self.odeints = [
+            functools.partial(odeint, **odeint_kwargs),
+            functools.partial(odeint, **odeint_kwargs)
+        ]
 
     def forward(self, var, args=None, log0=0):
         """
@@ -81,7 +87,7 @@ class AdjODEflow_(torch.nn.Module):  # pylint: disable=invalid-name
         params = self.func.params_
 
         var, logj = AdjointWrapper_.apply(
-            self.odeint, self.func, self.t_span, var, frozen_var, *params
+            self.odeints, self.func, self.t_span, var, frozen_var, *params
         )
         return var, logj + log0
 
@@ -106,7 +112,7 @@ class AdjODEflow_(torch.nn.Module):  # pylint: disable=invalid-name
         params = self.func.params_
 
         var, logj = AdjointWrapper_.apply(
-            self.odeint, self.func, self.t_span[::-1], var, frozen_var, *params
+           self.odeints, self.func, self.t_span[::-1], var, frozen_var, *params
         )
         return var, logj + log0
 
@@ -120,14 +126,14 @@ class AdjointWrapper_(torch.autograd.Function):  # pylint: disable=invalid-name
     """
 
     @staticmethod
-    def forward(ctx, odeint, func, t_span, var, frozen_var, *params):
+    def forward(ctx, odeints, func, t_span, var, frozen_var, *params):
         """
         Forward pass using the ODE solver.
 
         Args:
             ctx: Autograd context for saving information for backward pass.
             odeint: The ODE integration function.
-            func: A DynamicsAdjModule instance defining the ODE system.
+            func: A AdjModule instance defining the ODE system.
             t_span: Time span for integration.
             var: Initial state variable.
             frozen_var: Auxiliary variables, potentially requiring gradients.
@@ -142,20 +148,20 @@ class AdjointWrapper_(torch.autograd.Function):  # pylint: disable=invalid-name
             2. `*params` should be given explicitely in order to calculate the
             derivatives with respect to them.
         """
-        assert isinstance(func, DynamicsAdjModule), \
-            ("Expected `func` to be an instance of DynamicsAdjModule")
+        assert isinstance(func, AdjModule), \
+            ("Expected `func` to be an instance of AdjModule")
 
         # Perform ODE integration
-        var, logj = odeint(
+        var, logj = odeints[0](
             func.forward,
             t_span,
             var,
             args=frozen_var,
-            loss_rate=func.calc_logj_rate,
+            loss_rate=func.calc_logj_rate
         )
 
         # Save necessary tensors for the backward pass
-        ctx.odeint = odeint
+        ctx.odeints = odeints
         ctx.func = func
         ctx.t_span = t_span
         ctx.save_for_backward(var, logj, frozen_var, *params)
@@ -170,7 +176,7 @@ class AdjointWrapper_(torch.autograd.Function):  # pylint: disable=invalid-name
         # grad_{var} input/output are the $\lambda$ at terminal/initial times
 
         func = ctx.func
-        odeint = ctx.odeint
+        odeints = ctx.odeints
         t_span = ctx.t_span
         var, logj, frozen_var, *params = ctx.saved_tensors
 
@@ -181,12 +187,12 @@ class AdjointWrapper_(torch.autograd.Function):  # pylint: disable=invalid-name
 
         fzn = frozen_var
         if len(params) == 0 and (fzn is None or not fzn.requires_grad):
-            aug_var = odeint(
+            aug_var = odeints[1](
                 func.aug_reverse, t_span[::-1], aug_var, args=aug_frozen_var
                 )
             aug_loss = None
         else:
-            aug_var, aug_loss = odeint(
+            aug_var, aug_loss = odeints[1](
                 func.aug_reverse, t_span[::-1], aug_var, args=aug_frozen_var,
                 loss_rate=func.calc_grad_params_rate
                 )
@@ -204,10 +210,10 @@ class AdjointWrapper_(torch.autograd.Function):  # pylint: disable=invalid-name
 
 
 # =============================================================================
-class DynamicsAdjModule(torch.nn.Module, ABC):
+class AdjModule(torch.nn.Module, ABC):
     """
     Abstract base class for ODE systems with adjoint backpropagation and
-    log-Jacobian tracking, similar to `AdjODEflow_`.
+    log-Jacobian tracking, useful for `AdjODEflow_`.
 
     This class is a subclass of `torch.nn.Module` and provides the necessary
     structure for defining ODE systems that can be solved using adjoint-based
@@ -243,7 +249,7 @@ class DynamicsAdjModule(torch.nn.Module, ABC):
     def calc_logj_rate(self, t, var, *frozen_var):
         """
         Computes and returns the log-Jacobian rate of the system's flow using
-        the Hutchinsonestimator to approximate the trace of `df/dx` for volume
+        the Hutchinson estimator to approximate the trace of `df/dx` for volume
         scaling.
 
         Args:
@@ -279,12 +285,13 @@ class DynamicsAdjModule(torch.nn.Module, ABC):
             else:
                 var_dot = self.forward(t, var, frozen_var)
                 logj_dot = self.calc_logj_rate(t, var, frozen_var)
+
             hamilton = torch.sum(
-                    grad_logj * logj_dot + tie_adjoints(grad_var, var_dot)
-                    )
+                grad_logj * logj_dot + tie_adjoints(grad_var, var_dot)
+            )
 
             grad_var_dot, = \
-                torch.autograd.grad(- hamilton, (var,), retain_graph=False)
+                torch.autograd.grad(-hamilton, (var,), retain_graph=False)
 
         return TupleVar(var_dot, grad_var_dot)
 
@@ -306,14 +313,14 @@ class DynamicsAdjModule(torch.nn.Module, ABC):
             else:
                 var_dot = self.forward(t, var, frozen_var)
                 logj_dot = self.calc_logj_rate(t, var, frozen_var)
+
             hamilton = torch.sum(
-                    grad_logj * logj_dot + tie_adjoints(grad_var, var_dot)
-                    )
+                grad_logj * logj_dot + tie_adjoints(grad_var, var_dot)
+            )
 
             grad_params_rate = torch.autograd.grad(
-                    - hamilton, params,
-                    retain_graph=False, materialize_grads=True
-                    )
+                -hamilton, params, retain_graph=False, materialize_grads=True
+            )
 
         return TupleVar(*grad_params_rate)
 
@@ -324,7 +331,7 @@ class DynamicsAdjModule(torch.nn.Module, ABC):
 
 
 # =============================================================================
-class DynamicsAdjWrapper(DynamicsAdjModule):
+class AdjModuleWrapper(AdjModule):
     """
     A wrapper class for a function that defines the ODE system dynamics,
     enabling adjoint-based backpropagation with log-Jacobian tracking.
@@ -332,7 +339,7 @@ class DynamicsAdjWrapper(DynamicsAdjModule):
     This class wraps a function that computes the time derivative of the
     state variable in an ODE system. It provides the `forward` method
     directly from the wrapped function. If the wrapped function does not
-    implement `calc_logj_rate`, the methods from `DynamicsAdjModule`, such
+    implement `calc_logj_rate`, the methods from `AdjModule`, such
     as `calc_logj_rate`, are inherited.
 
     Args:
@@ -344,7 +351,7 @@ class DynamicsAdjWrapper(DynamicsAdjModule):
     Methods:
         - `forward`: Directly uses the provided function to compute the time
           derivative of the state variable.
-        - `calc_logj_rate`: Inherited from `DynamicsAdjModule` if the wrapped
+        - `calc_logj_rate`: Inherited from `AdjModule` if the wrapped
           function doesn't define a `calc_logj_rate` method. If the function
           has its own `calc_logj_rate`, that will be used.
     """
