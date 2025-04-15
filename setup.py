@@ -1,11 +1,13 @@
 # Created by Javad Komijani (2024)
 
+"""This is the setup script for `torch_solve_ext`."""
+
 from setuptools import setup
 
 
 def readme():
-    """Read the contents of the README file."""
-    with open('README.rst') as f:
+    """Reads and returns the contents of the README.md file."""
+    with open('README.md', encoding='utf-8') as f:
         return f.read()
 
 
@@ -24,7 +26,7 @@ package_dir = {
 }
 
 setup(name='torch_solve_ext',
-      version='1.0',
+      version='1.0.0',
       description="a package for solving (differential) equations with torch.",
       packages=packages,
       package_dir=package_dir,
