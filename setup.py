@@ -14,15 +14,13 @@ def readme():
 # List of packages in the project
 packages = [
     'torch_solve_ext',
-    'torch_solve_ext.integrate',
-    'torch_solve_ext.stats'
+    'torch_solve_ext.integrate'
 ]
 
 # Dictionary of where each package resides
 package_dir = {
     'torch_solve_ext': 'src',
-    'torch_solve_ext.integrate': 'src/integrate',
-    'torch_solve_ext.stats': 'src/stats'
+    'torch_solve_ext.integrate': 'src/integrate'
 }
 
 setup(name='torch_solve_ext',
