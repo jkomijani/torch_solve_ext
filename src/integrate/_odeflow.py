@@ -11,7 +11,7 @@ import functools
 import torch
 
 from ._odeint import odeint
-from ..stats import hutchinson_estimator
+from ._hutchinson_estimator import hutchinson_estimator
 
 
 class ODEflow(torch.nn.Module):

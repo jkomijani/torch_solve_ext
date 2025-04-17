@@ -11,7 +11,7 @@ import functools
 import torch
 
 from ._lie_group_odeint import lie_group_odeint
-from ..stats import hutchinson_estimator
+from ._hutchinson_estimator import hutchinson_estimator
 
 
 class LieODEflow(torch.nn.Module):

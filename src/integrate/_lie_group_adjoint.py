@@ -13,7 +13,7 @@ import torch
 from ._lie_group_odeint import lie_group_odeint
 from ._adjoint import TupleVar
 from ._adjoint import tie_adjoints
-from ..stats import hutchinson_estimator
+from ._hutchinson_estimator import hutchinson_estimator
 
 
 # =============================================================================
