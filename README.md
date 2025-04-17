@@ -1,5 +1,8 @@
 # torch_solve_ext
 
+| This repository has been archived. \
+| Development continues in [lattice_ml](https://github.com/jkomijani/lattice_ml) under the `lattice_ml.integrate` module.
+
 This package is for solving differential equations, particularly, for 
 integrating ODEs that describe the flow of state variables.
 
